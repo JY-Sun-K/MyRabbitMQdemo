@@ -7,7 +7,7 @@ import (
 )
 
 //定义一个连接 url 格式 amqp://账号:密码@rabbitmq服务器地址:端口号/vhost
-const MQURL = "amqp://penguin:penguin@127.0.0.1:5672/RabbitMQ"
+const MQURL = "amqp://penguin:penguin@127.0.0.1:5672/penguin"
 
 type RabbitMQ struct {
 	conn *amqp.Connection
@@ -151,5 +151,201 @@ func (r *RabbitMQ) ConsumeSimple() {
 	}()
 
 	log.Printf("[*] waiting for messages,to exit press CTRL+C")
+	<-forever
+}
+
+//订阅模式创建RabbitMQ实例
+func NewRabbitMQPubSub(exchange string) *RabbitMQ {
+	rabbitmq:= NewRabbitMQ("",exchange,"")
+	var err error
+	//创建rabbitmq 连接
+	rabbitmq.conn,err = amqp.Dial(rabbitmq.Mqurl)
+	rabbitmq.failOnErr(err,"创建连接错误")
+	rabbitmq.channel,err = rabbitmq.conn.Channel()
+	rabbitmq.failOnErr(err,"获取channel失败")
+	return rabbitmq
+}
+
+func (r *RabbitMQ) PublishPub(message string) {
+	//1.尝试创建交换机
+	err:= r.channel.ExchangeDeclare(
+		r.Exchange,
+		//交换机的类型为广播
+		"fanout",
+		true,
+		false,
+		//true表示这个exchange不可以被ckient用来推送消息，仅用来进行exchange和exchange之间的绑定
+		false,
+		false,
+		nil,
+
+		)
+	r.failOnErr(err,"Failed to declare an exchange")
+
+	//发送消息
+	err= r.channel.Publish(r.Exchange,"",false,false,amqp.Publishing{
+		ContentType: "text/plain",
+		Body:        []byte(message),
+	})
+}
+
+func (r *RabbitMQ) RecieveSub() {
+	//1.尝试创建交换机
+	err:= r.channel.ExchangeDeclare(
+		r.Exchange,
+		//交换机的类型为广播
+		"fanout",
+		true,
+		false,
+		//true表示这个exchange不可以被ckient用来推送消息，仅用来进行exchange和exchange之间的绑定
+		false,
+		false,
+		nil,
+
+	)
+	r.failOnErr(err,"Failed to declare an exchange")
+
+	//2.试探性创建队列，注意队列不要写名称
+	q,err:=r.channel.QueueDeclare(
+		"",//随机生产队列名称
+		false,
+		false,
+		true,
+		false,
+		nil,
+		)
+	r.failOnErr(err,"failed to declare a queue")
+
+	//绑定队列到exchange 中
+	err=r.channel.QueueBind(
+		q.Name,
+		//在pub/sub模式下，这里的key要为空
+		"",
+		r.Exchange,
+		false,
+		nil,
+
+		)
+	//消费消息
+	message,err:=r.channel.Consume(
+		q.Name,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+		)
+	forever:=make(chan bool)
+
+	go func() {
+		for d:= range message{
+			log.Printf("received a message : %s",d.Body)
+		}
+	}()
+
+	fmt.Println("退出请按 CTRL+C \n")
+	<-forever
+}
+
+//路由模式
+//创建RabbitMQ实例
+func NewRabbitMQRouting(exchange string,routingKey string) *RabbitMQ {
+	rabbitmq:= NewRabbitMQ("",exchange,routingKey)
+	var err error
+	//创建rabbitmq 连接
+	rabbitmq.conn,err = amqp.Dial(rabbitmq.Mqurl)
+	rabbitmq.failOnErr(err,"创建连接错误")
+	rabbitmq.channel,err = rabbitmq.conn.Channel()
+	rabbitmq.failOnErr(err,"获取channel失败")
+	return rabbitmq
+}
+
+//路由模式发送消息
+func (r *RabbitMQ) PublishRouting(message string) {
+	//1.尝试创建交换机
+	err:= r.channel.ExchangeDeclare(
+		r.Exchange,
+		//交换机的类型为广播
+		"direct",
+		true,
+		false,
+		//true表示这个exchange不可以被ckient用来推送消息，仅用来进行exchange和exchange之间的绑定
+		false,
+		false,
+		nil,
+
+	)
+	r.failOnErr(err,"Failed to declare an exchange")
+
+	//发送消息
+	err= r.channel.Publish(
+		r.Exchange,
+		//设置
+		r.Key,
+		false,
+		false,
+		amqp.Publishing{
+		ContentType: "text/plain",
+		Body:        []byte(message),
+	})
+}
+
+func (r *RabbitMQ) RecieveRouting() {
+	//1.尝试创建交换机
+	err:= r.channel.ExchangeDeclare(
+		r.Exchange,
+		//交换机的类型为广播
+		"direct",
+		true,
+		false,
+		//true表示这个exchange不可以被ckient用来推送消息，仅用来进行exchange和exchange之间的绑定
+		false,
+		false,
+		nil,
+
+	)
+	r.failOnErr(err,"Failed to declare an exchange")
+
+	//2.试探性创建队列，注意队列不要写名称
+	q,err:=r.channel.QueueDeclare(
+		"",//随机生产队列名称
+		false,
+		false,
+		true,
+		false,
+		nil,
+	)
+	r.failOnErr(err,"failed to declare a queue")
+
+	//绑定队列到exchange 中
+	err=r.channel.QueueBind(
+		q.Name,
+		//在pub/sub模式下，这里的key要为空
+		r.Key,
+		r.Exchange,
+		false,
+		nil,
+
+	)
+	//消费消息
+	message,err:=r.channel.Consume(
+		q.Name,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	forever:=make(chan bool)
+
+	go func() {
+		for d:= range message{
+			log.Printf("received a message : %s",d.Body)
+		}
+	}()
+
+	fmt.Println("退出请按 CTRL+C \n")
 	<-forever
 }
